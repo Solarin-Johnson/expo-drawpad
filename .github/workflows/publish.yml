@@ -3,10 +3,10 @@ name: Publish Package
 on:
   push:
     tags:
-      - "v*" # triggers on tags like v0.1.2
+      - "v*"
 
 jobs:
-  build-and-publish:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -17,21 +17,6 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Install peer dependencies for build
-        run: |
-          npm install react-native-svg@^15.11.2 \
-                      react-native-gesture-handler@^2.28.0 \
-                      react-native-reanimated@^3.17.4 \
-                      @types/react@^19.1.11 \
-                      @types/react-native@^0.81.0 \
-                      --legacy-peer-deps
-
-      - name: Build package
-        run: npm run build
 
       - name: Publish to npm
         run: npm publish
