@@ -1,6 +1,6 @@
 {
   "name": "expo-drawpad",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A reusable drawpad component for Expo React Native",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
