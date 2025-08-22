@@ -1,6 +1,6 @@
 {
   "name": "expo-drawpad",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A reusable drawpad component for Expo React Native",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,12 @@
   "keywords": [
     "react-native",
     "expo",
-    "component"
+    "component",
+    "drawpad",
+    "signature",
+    "canvas",
+    "svg",
+    "gesture"
   ],
   "author": "Solarin Johnson",
   "license": "ISC",
