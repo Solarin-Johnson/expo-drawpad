@@ -22,8 +22,9 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef,
 import { Platform, View } from "react-native";
 import Svg, { G, Path } from "react-native-svg";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { useSharedValue, useAnimatedProps, runOnJS, interpolate, withTiming, useAnimatedReaction, Easing, runOnUI, Extrapolation, } from "react-native-reanimated";
+import Animated, { useSharedValue, useAnimatedProps, interpolate, withTiming, useAnimatedReaction, Easing, Extrapolation, } from "react-native-reanimated";
 import { svgPathProperties } from "svg-path-properties";
+import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 var AnimatedPath = Animated.createAnimatedComponent(Path);
 var PATH_PROPS = {
     fill: "none",
@@ -32,10 +33,13 @@ var PATH_PROPS = {
 };
 var isWeb = Platform.OS === "web";
 var DrawPad = forwardRef(function (_a, ref) {
-    var _b = _a.strokeWidth, strokeWidth = _b === void 0 ? 3.5 : _b, _c = _a.stroke, stroke = _c === void 0 ? "grey" : _c, pathLength = _a.pathLength, playing = _a.playing, signed = _a.signed;
+    var _b = _a.strokeWidth, strokeWidth = _b === void 0 ? 3.5 : _b, _c = _a.stroke, stroke = _c === void 0 ? "grey" : _c, _pathLength = _a.pathLength, playing = _a.playing, signed = _a.signed, _pathProps = _a.pathProps;
     var _d = useState([]), paths = _d[0], setPaths = _d[1];
     var currentPath = useSharedValue("");
     var progress = useSharedValue(1);
+    var __pathLength = useSharedValue(0);
+    var pathLength = _pathLength || __pathLength;
+    var pathProps = __assign({ _pathProps: _pathProps }, PATH_PROPS);
     useEffect(function () {
         if (pathLength) {
             var totalLength = paths.reduce(function (total, path) {
@@ -85,9 +89,9 @@ var DrawPad = forwardRef(function (_a, ref) {
             timeoutRef.current = null;
         }
         if (playing) {
-            runOnUI(function () {
+            scheduleOnUI(function () {
                 playing.value = false;
-            })();
+            });
         }
     }, [playing]);
     useImperativeHandle(ref, function () { return ({
@@ -96,16 +100,24 @@ var DrawPad = forwardRef(function (_a, ref) {
         play: handlePlay,
         stop: handleStop,
     }); });
+    var prevX = useSharedValue(0);
+    var prevY = useSharedValue(0);
     var panGesture = Gesture.Pan()
         .minDistance(0)
         .onStart(function (e) {
         currentPath.value = "M ".concat(e.x, " ").concat(e.y);
+        prevX.value = e.x;
+        prevY.value = e.y;
     })
         .onUpdate(function (e) {
-        currentPath.value += " L ".concat(e.x, " ").concat(e.y);
+        var midX = (prevX.value + e.x) / 2;
+        var midY = (prevY.value + e.y) / 2;
+        currentPath.value += " Q ".concat(prevX.value, " ").concat(prevY.value, " ").concat(midX, " ").concat(midY);
+        prevX.value = e.x;
+        prevY.value = e.y;
     })
         .onEnd(function () {
-        runOnJS(finishPath)();
+        scheduleOnRN(finishPath);
     });
     useAnimatedReaction(function () { var _a; return (_a = playing === null || playing === void 0 ? void 0 : playing.value) !== null && _a !== void 0 ? _a : false; }, function (isPlaying) {
         if (!playing || !pathLength)
@@ -133,12 +145,12 @@ var DrawPad = forwardRef(function (_a, ref) {
                     var prevLength = paths.slice(0, i).reduce(function (total, prevPath) {
                         return total + new svgPathProperties(prevPath).getTotalLength();
                     }, 0);
-                    return (React.createElement(DrawPath, { key: i, path: p, strokeWidth: strokeWidth, stroke: stroke, progress: progress, prevLength: prevLength, totalPathLength: pathLength }));
+                    return (React.createElement(DrawPath, { key: i, path: p, strokeWidth: strokeWidth, stroke: stroke, progress: progress, prevLength: prevLength, totalPathLength: pathLength, pathProps: pathProps }));
                 }),
-                React.createElement(AnimatedPath, __assign({ animatedProps: animatedProps, stroke: stroke, strokeWidth: strokeWidth }, PATH_PROPS))))));
+                React.createElement(AnimatedPath, __assign({}, pathProps, { animatedProps: animatedProps, stroke: stroke, strokeWidth: strokeWidth }))))));
 });
 var DrawPath = function (_a) {
-    var path = _a.path, strokeWidth = _a.strokeWidth, stroke = _a.stroke, progress = _a.progress, prevLength = _a.prevLength, totalPathLength = _a.totalPathLength;
+    var path = _a.path, strokeWidth = _a.strokeWidth, stroke = _a.stroke, progress = _a.progress, prevLength = _a.prevLength, totalPathLength = _a.totalPathLength, pathProps = _a.pathProps;
     var pathRef = useRef(null);
     // Adjustment added to account for rendering quirks in strokeDasharray calculations.
     var PATH_LENGTH_ADJUSTMENT = 1;
@@ -158,7 +170,7 @@ var DrawPath = function (_a) {
         };
     });
     return (React.createElement(G, null,
-        React.createElement(Path, __assign({ d: path, strokeWidth: strokeWidth, stroke: stroke, ref: pathRef, strokeOpacity: 0.2 }, PATH_PROPS)),
-        React.createElement(AnimatedPath, __assign({ d: path, strokeWidth: strokeWidth, stroke: stroke, strokeDasharray: length, animatedProps: animatedProps }, PATH_PROPS))));
+        React.createElement(Path, __assign({ d: path }, pathProps, { strokeWidth: strokeWidth, stroke: stroke, ref: pathRef, strokeOpacity: 0.2 })),
+        React.createElement(AnimatedPath, __assign({ d: path }, pathProps, { strokeWidth: strokeWidth, stroke: stroke, strokeDasharray: length, animatedProps: animatedProps }))));
 };
 export default DrawPad;

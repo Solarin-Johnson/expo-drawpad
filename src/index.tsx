@@ -12,16 +12,15 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
   useAnimatedProps,
-  runOnJS,
   interpolate,
   withTiming,
   SharedValue,
   useAnimatedReaction,
   Easing,
-  runOnUI,
   Extrapolation,
 } from "react-native-reanimated";
 import { svgPathProperties } from "svg-path-properties";
+import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
@@ -37,6 +36,7 @@ export interface DrawPadProps {
   pathLength?: SharedValue<number>;
   playing?: SharedValue<boolean>;
   signed?: SharedValue<boolean>;
+  pathProps?: PathProps;
 }
 
 export type DrawPadHandle = {
@@ -50,12 +50,26 @@ const isWeb = Platform.OS === "web";
 
 const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
   (
-    { strokeWidth = 3.5, stroke = "grey", pathLength, playing, signed },
+    {
+      strokeWidth = 3.5,
+      stroke = "grey",
+      pathLength: _pathLength,
+      playing,
+      signed,
+      pathProps: _pathProps,
+    },
     ref
   ) => {
     const [paths, setPaths] = useState<string[]>([]);
     const currentPath = useSharedValue<string>("");
     const progress = useSharedValue(1);
+    const __pathLength = useSharedValue(0);
+    const pathLength = _pathLength || __pathLength;
+
+    const pathProps = {
+      _pathProps,
+      ...PATH_PROPS,
+    };
 
     useEffect(() => {
       if (pathLength) {
@@ -112,9 +126,9 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
         timeoutRef.current = null;
       }
       if (playing) {
-        runOnUI(() => {
+        scheduleOnUI(() => {
           playing.value = false;
-        })();
+        });
       }
     }, [playing]);
 
@@ -125,16 +139,25 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
       stop: handleStop,
     }));
 
+    const prevX = useSharedValue(0);
+    const prevY = useSharedValue(0);
+
     const panGesture = Gesture.Pan()
       .minDistance(0)
       .onStart((e) => {
         currentPath.value = `M ${e.x} ${e.y}`;
+        prevX.value = e.x;
+        prevY.value = e.y;
       })
       .onUpdate((e) => {
-        currentPath.value += ` L ${e.x} ${e.y}`;
+        const midX = (prevX.value + e.x) / 2;
+        const midY = (prevY.value + e.y) / 2;
+        currentPath.value += ` Q ${prevX.value} ${prevY.value} ${midX} ${midY}`;
+        prevX.value = e.x;
+        prevY.value = e.y;
       })
       .onEnd(() => {
-        runOnJS(finishPath)();
+        scheduleOnRN(finishPath);
       });
 
     useAnimatedReaction(
@@ -185,14 +208,15 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
                   progress={progress}
                   prevLength={prevLength}
                   totalPathLength={pathLength}
+                  pathProps={pathProps}
                 />
               );
             })}
             <AnimatedPath
+              {...pathProps}
               animatedProps={animatedProps}
               stroke={stroke}
               strokeWidth={strokeWidth}
-              {...PATH_PROPS}
             />
           </Svg>
         </View>
@@ -208,6 +232,7 @@ const DrawPath = ({
   progress,
   prevLength,
   totalPathLength,
+  pathProps,
 }: {
   path: string;
   strokeWidth: number;
@@ -215,6 +240,7 @@ const DrawPath = ({
   prevLength?: number;
   progress?: SharedValue<number>;
   totalPathLength?: SharedValue<number>;
+  pathProps?: PathProps;
 }) => {
   const pathRef = useRef<Path>(null);
   // Adjustment added to account for rendering quirks in strokeDasharray calculations.
@@ -243,19 +269,19 @@ const DrawPath = ({
     <G>
       <Path
         d={path}
+        {...pathProps}
         strokeWidth={strokeWidth}
         stroke={stroke}
         ref={pathRef}
         strokeOpacity={0.2}
-        {...PATH_PROPS}
       />
       <AnimatedPath
         d={path}
+        {...pathProps}
         strokeWidth={strokeWidth}
         stroke={stroke}
         strokeDasharray={length}
         animatedProps={animatedProps}
-        {...PATH_PROPS}
       />
     </G>
   );
