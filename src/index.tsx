@@ -7,7 +7,14 @@ import React, {
   useState,
 } from "react";
 import { Platform, View } from "react-native";
-import Svg, { G, Path, PathProps } from "react-native-svg";
+import Svg, {
+  Defs,
+  G,
+  LinearGradient,
+  Path,
+  PathProps,
+  Stop,
+} from "react-native-svg";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
@@ -18,6 +25,8 @@ import Animated, {
   useAnimatedReaction,
   Easing,
   Extrapolation,
+  useDerivedValue,
+  EasingFunction,
 } from "react-native-reanimated";
 import { svgPathProperties } from "svg-path-properties";
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
@@ -30,6 +39,15 @@ const PATH_PROPS: PathProps = {
   strokeLinejoin: "round",
 };
 
+export interface gradientProps {
+  colors: string[];
+  locations?: number[];
+  start?: { x: number; y: number };
+  end?: { x: number; y: number };
+}
+
+export type BrushType = "solid" | "dotted" | "dashed" | "highlighter";
+
 export interface DrawPadProps {
   strokeWidth?: number;
   stroke?: string;
@@ -37,6 +55,12 @@ export interface DrawPadProps {
   playing?: SharedValue<boolean>;
   signed?: SharedValue<boolean>;
   pathProps?: PathProps;
+  gradient?: gradientProps;
+  brushType?: BrushType;
+  onDrawStart?: () => void;
+  onDrawEnd?: () => void;
+  animationDuration?: number;
+  easingFunction?: EasingFunction;
 }
 
 export type DrawPadHandle = {
@@ -44,6 +68,10 @@ export type DrawPadHandle = {
   undo: () => void;
   play: () => void;
   stop: () => void;
+  getPaths: () => string[];
+  setPaths?: (paths: string[]) => void;
+  addPath?: (path: string) => void;
+  getSVG?: () => Promise<string>;
 };
 
 const isWeb = Platform.OS === "web";
@@ -57,6 +85,12 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
       playing,
       signed,
       pathProps: _pathProps,
+      gradient,
+      brushType = "solid",
+      onDrawStart,
+      onDrawEnd,
+      animationDuration: _duration,
+      easingFunction = Easing.bezier(0.4, 0, 0.5, 1),
     },
     ref
   ) => {
@@ -66,8 +100,14 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
     const __pathLength = useSharedValue(0);
     const pathLength = _pathLength || __pathLength;
 
+    const duration = useDerivedValue(() => {
+      return _duration || pathLength.value * 2;
+    });
+
+    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
     const pathProps = {
-      _pathProps,
+      ...(_pathProps || {}),
       ...PATH_PROPS,
     };
 
@@ -80,12 +120,27 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
       }
     }, [paths, pathLength]);
 
+    const sharedProps: PathProps = {
+      strokeWidth,
+      stroke: gradient ? "url(#strokeGradient)" : stroke,
+      strokeOpacity: brushType === "highlighter" ? 0.3 : 1,
+      strokeDasharray:
+        brushType === "dotted"
+          ? [1, strokeWidth * 2]
+          : brushType === "dashed"
+          ? [strokeWidth * 4, strokeWidth * 2]
+          : "0",
+    };
+
     const animatedProps = useAnimatedProps(() => ({
       d: currentPath.value,
     }));
 
     const finishPath = () => {
       const pathValue = currentPath.value;
+      if (onDrawEnd) {
+        scheduleOnRN(onDrawEnd);
+      }
       if (pathValue) {
         setPaths((prev) => {
           const updatedPaths = [...prev, pathValue];
@@ -109,14 +164,13 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
         return newPaths;
       });
     }, []);
-    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handlePlay = useCallback(() => {
       if (playing && pathLength && !playing.value) {
         playing.value = true;
         timeoutRef.current = setTimeout(() => {
           playing.value = false;
-        }, pathLength.value * 2);
+        }, duration.value);
       }
     }, [playing, pathLength]);
 
@@ -132,11 +186,33 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
       }
     }, [playing]);
 
+    const handleSetPaths = (newPaths: string[]) => {
+      setPaths(newPaths);
+    };
+
+    const handleAddPath = (path: string) => {
+      setPaths((prev) => [...prev, path]);
+    };
+
+    const handleGetSVG = async (): Promise<string> => {
+      const svgString = buildSVGString({
+        paths,
+        gradient,
+        ...pathProps,
+        ...sharedProps,
+      });
+      return svgString;
+    };
+
     useImperativeHandle(ref, () => ({
       erase: handleErase,
       undo: handleUndo,
       play: handlePlay,
       stop: handleStop,
+      getPaths: () => paths,
+      setPaths: handleSetPaths,
+      addPath: handleAddPath,
+      getSVG: handleGetSVG,
     }));
 
     const prevX = useSharedValue(0);
@@ -148,6 +224,9 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
         currentPath.value = `M ${e.x} ${e.y}`;
         prevX.value = e.x;
         prevY.value = e.y;
+        if (onDrawStart) {
+          scheduleOnRN(onDrawStart);
+        }
       })
       .onUpdate((e) => {
         const midX = (prevX.value + e.x) / 2;
@@ -165,12 +244,12 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
       (isPlaying) => {
         if (!playing || !pathLength) return;
 
-        const duration = pathLength.value * 2;
-        const easingFunction = Easing.bezier(0.4, 0, 0.5, 1);
-
         if (isPlaying) {
           progress.value = 0;
-          progress.value = withTiming(1, { duration, easing: easingFunction });
+          progress.value = withTiming(1, {
+            duration: duration.value,
+            easing: easingFunction,
+          });
           return;
         }
 
@@ -180,7 +259,7 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
             duration:
               signed?.value || progress.value > 0.999
                 ? 1
-                : progress.value * duration,
+                : progress.value * duration.value,
             easing: easingFunction,
           },
           () => {
@@ -194,6 +273,28 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
       <GestureDetector gesture={panGesture}>
         <View style={{ flex: 1 }}>
           <Svg height={"100%"} width={"100%"}>
+            {gradient && (
+              <Defs>
+                <LinearGradient
+                  id="strokeGradient"
+                  x1="0%"
+                  y1="0%"
+                  x2="100%"
+                  y2="0%"
+                >
+                  {gradient.colors.map((color, i) => (
+                    <Stop
+                      key={i}
+                      offset={
+                        gradient.locations?.[i] ??
+                        i / (gradient.colors.length - 1)
+                      }
+                      stopColor={color}
+                    />
+                  ))}
+                </LinearGradient>
+              </Defs>
+            )}
             {paths.map((p, i) => {
               const prevLength = paths.slice(0, i).reduce((total, prevPath) => {
                 return total + new svgPathProperties(prevPath).getTotalLength();
@@ -203,20 +304,18 @@ const DrawPad = forwardRef<DrawPadHandle, DrawPadProps>(
                 <DrawPath
                   key={i}
                   path={p}
-                  strokeWidth={strokeWidth}
-                  stroke={stroke}
                   progress={progress}
                   prevLength={prevLength}
                   totalPathLength={pathLength}
-                  pathProps={pathProps}
+                  {...sharedProps}
+                  {...pathProps}
                 />
               );
             })}
             <AnimatedPath
               {...pathProps}
+              {...sharedProps}
               animatedProps={animatedProps}
-              stroke={stroke}
-              strokeWidth={strokeWidth}
             />
           </Svg>
         </View>
@@ -232,21 +331,20 @@ const DrawPath = ({
   progress,
   prevLength,
   totalPathLength,
-  pathProps,
+  ...pathProps
 }: {
   path: string;
-  strokeWidth: number;
-  stroke: string;
   prevLength?: number;
   progress?: SharedValue<number>;
   totalPathLength?: SharedValue<number>;
-  pathProps?: PathProps;
-}) => {
+} & Omit<PathProps, "d">) => {
   const pathRef = useRef<Path>(null);
   // Adjustment added to account for rendering quirks in strokeDasharray calculations.
   const PATH_LENGTH_ADJUSTMENT = 1;
   const length =
     new svgPathProperties(path).getTotalLength() + PATH_LENGTH_ADJUSTMENT;
+
+  const { strokeOpacity, strokeDasharray } = pathProps;
 
   const animatedProps = useAnimatedProps(() => {
     const prev = prevLength ?? 0;
@@ -265,6 +363,10 @@ const DrawPath = ({
     };
   });
 
+  const dasharray = Array.isArray(strokeDasharray)
+    ? strokeDasharray
+    : undefined;
+
   return (
     <G>
       <Path
@@ -273,18 +375,69 @@ const DrawPath = ({
         strokeWidth={strokeWidth}
         stroke={stroke}
         ref={pathRef}
-        strokeOpacity={0.2}
+        strokeOpacity={Number(strokeOpacity) * 0.2}
       />
       <AnimatedPath
         d={path}
         {...pathProps}
         strokeWidth={strokeWidth}
         stroke={stroke}
-        strokeDasharray={length}
-        animatedProps={animatedProps}
+        strokeDasharray={dasharray || length}
+        animatedProps={dasharray ? {} : animatedProps}
       />
     </G>
   );
+};
+
+const buildDefsString = (gradient?: gradientProps): string => {
+  if (!gradient) return "";
+
+  const stops = gradient.colors
+    .map((color, i) => {
+      const offset =
+        gradient.locations?.[i] ?? i / (gradient.colors.length - 1);
+      return `<stop offset="${offset}" stop-color="${color}" />`;
+    })
+    .join("\n");
+
+  return `
+    <defs>
+      <linearGradient id="strokeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+        ${stops}
+      </linearGradient>
+    </defs>
+  `;
+};
+
+export const buildSVGString = ({
+  paths,
+  gradient,
+  ...pathProps
+}: {
+  paths: String[];
+  gradient?: gradientProps;
+} & PathProps) => {
+  const defs = buildDefsString(gradient);
+
+  const svgPaths = paths
+    .map((d) => {
+      const kebabProps = Object.entries(pathProps || {})
+        .filter(([_, v]) => v !== undefined)
+        .map(([key, value]) => {
+          const kebabKey = key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
+          return `${kebabKey}="${String(value)}"`;
+        });
+
+      return `<path d="${d}" ${kebabProps.join(" ")} />`;
+    })
+    .join("\n");
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+      ${defs}
+      ${svgPaths}
+    </svg>
+  `.trim();
 };
 
 export default DrawPad;
